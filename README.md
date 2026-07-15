@@ -1,17 +1,15 @@
 <div align="center">
 
-# Acquisition IoT Cloud — STM32F407 & ESP8266/ESP32
+# Acquisition IoT déclenchée par bouton — STM32F407 & ESP8266
 
-### Acquisition ADC temps réel et supervision cloud multi-canal
+### Mesure ADC ponctuelle et envoi vers un serveur distant via commandes AT
 
 ![STM32](https://img.shields.io/badge/-STM32F407-03234B?style=for-the-badge&logo=stmicroelectronics)
-![ESP](https://img.shields.io/badge/-ESP8266%2FESP32-E7352C?style=for-the-badge&logo=espressif)
+![ESP8266](https://img.shields.io/badge/-ESP8266-E7352C?style=for-the-badge&logo=espressif)
 ![C](https://img.shields.io/badge/-C-00599C?style=for-the-badge&logo=c)
-![MQTT](https://img.shields.io/badge/-MQTT-660066?style=for-the-badge&logo=mqtt)
-![ThingSpeak](https://img.shields.io/badge/-ThingSpeak-1E88E5?style=for-the-badge)
-![NodeRED](https://img.shields.io/badge/-Node--RED-8F0000?style=for-the-badge&logo=nodered&logoColor=white)
+![HAL](https://img.shields.io/badge/-STM32_HAL-03234B?style=for-the-badge)
 
-`C bare-metal / HAL` · `ADC + DMA` · `Commandes AT` · `IoT Cloud`
+`IoT` · `Acquisition Événementielle` · `Communication Série DMA` · `Commandes AT`
 
 </div>
 
@@ -19,165 +17,133 @@
 
 ## 📋 Vue d'ensemble
 
-Système embarqué d'acquisition et de transmission de données IoT vers le cloud. Le STM32F407 échantillonne en continu trois canaux analogiques via **ADC en mode scan, déclenché par timer et géré en DMA circulaire** (aucune intervention CPU nécessaire pour l'acquisition), tandis qu'un module ESP (ESP8266/ESP32) pilote la connexion Wi-Fi et relaie les données vers **ThingSpeak** (historique cloud) et un **broker MQTT** (Mosquitto → dashboard Node-RED) via des commandes AT.
+Système embarqué déclenché par bouton : une pression sur PA0 lance une acquisition ADC (8 bits, canal unique) puis transmet la valeur mesurée vers un serveur distant via un module ESP8266, piloté en commandes AT sur liaison série. La réception des réponses AT se fait par **DMA avec détection de ligne inactive (idle)**, ce qui permet de recevoir des trames de taille variable sans connaître leur longueur à l'avance.
 
 ## ⚙️ Contributions clés
 
-- 📡 Acquisition ADC multi-canaux (3 voies) déclenchée par timer, transférée en DMA sans blocage CPU
-- 🌐 Intégration du module ESP (commandes AT) pour la connexion Wi-Fi et la communication HTTP/MQTT
-- ☁️ Transmission des données vers ThingSpeak par requête HTTP GET
-- 🔄 Publication en parallèle sur un broker MQTT local, visualisé en temps réel via Node-RED
-- 🛠️ Configuration bas-niveau HAL : ADC+DMA, TIM2 (déclenchement de conversion), USART2 (liaison ESP)
+- 🔘 Acquisition déclenchée par événement (interruption externe EXTI0, front descendant)
+- 📊 Lecture ADC 8 bits par polling, sur un canal unique (`ADC_CHANNEL_1`)
+- 📡 Pilotage complet de l'ESP8266 par commandes AT : reset, mode station, connexion Wi-Fi, connexion TCP, envoi de données
+- 🔄 Réception série non bloquante par DMA, avec détection de fin de trame par ligne inactive (`HAL_UARTEx_ReceiveToIdle_DMA`)
+- ⏱️ Cycle contrôlé : 15 secondes de pause après chaque envoi avant de pouvoir déclencher une nouvelle mesure
 
 ## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
-    A[3 Capteurs analogiques] -->|ADC1 scan mode| B(STM32F407)
-    T[TIM2 TRGO] -->|déclenche conversion| B
-    B -->|DMA circulaire| B
-    B -->|USART2 115200 baud<br/>Commandes AT| C[Module ESP<br/>ESP8266 / ESP32]
-    C -->|Wi-Fi HTTP GET| D[(ThingSpeak<br/>historique cloud)]
-    C -->|Wi-Fi MQTT PUB| E[Broker Mosquitto]
-    E --> F[Dashboard Node-RED<br/>jauges temps réel]
+    B[Bouton PA0<br/>EXTI0] -->|Front descendant| M(STM32F407)
+    M -->|ADC1 8 bits<br/>polling| M
+    M -->|USART2 115200 baud<br/>Commandes AT| E[ESP8266]
+    E -->|Wi-Fi TCP| S[(Serveur distant<br/>SERVER_IP_WRITE)]
+    E -.->|Réponses AT<br/>DMA + Idle Line| M
 
-    style B fill:#3b5bfd,color:#fff
-    style C fill:#0aa6a1,color:#fff
-    style D stroke:#1E88E5,stroke-width:2px
-    style E stroke:#660066,stroke-width:2px
-    style F stroke:#8F0000,stroke-width:2px
+    style M fill:#3b5bfd,color:#fff
+    style E fill:#0aa6a1,color:#fff
+    style S stroke:#1E88E5,stroke-width:2px
 ```
 
-## 🎥 Voir le système en action
+## 🔄 Cycle de fonctionnement
 
-### Dashboard Node-RED — jauges temps réel
-
-<div align="center">
-  <img src="images/dashboard_node_red.png" width="700" alt="Dashboard Node-RED avec jauges ADC en temps réel">
-  <br><em>Visualisation temps réel des trois canaux ADC via Node-RED</em>
-</div>
-
-### ThingSpeak — historique cloud des trois canaux
-
-<div align="center">
-  <img src="images/thingspeak_chart.png" width="700" alt="Graphiques ThingSpeak des trois champs ADC">
-  <br><em>Historique cloud des valeurs ADC1/ADC2/ADC3 sur ThingSpeak</em>
-</div>
-
-### Trace série (HTerm) — trafic AT / MQTT / HTTP
-
-<div align="center">
-  <img src="images/hterm_trace_thingspeak.png" width="700" alt="Trace HTerm — commandes AT MQTT et HTTP ThingSpeak">
-  <br><em>Séquence de commandes AT : publication MQTT (adc_1/2/3) puis requête HTTP GET vers ThingSpeak</em>
-</div>
-
-<div align="center">
-  <img src="images/hterm_trace_robot.png" width="700" alt="Trace HTerm — topics robot/adc_x">
-  <br><em>Publication MQTT sur les topics dédiés + connexion IP directe au broker</em>
-</div>
+1. **Initialisation** : reset de l'ESP8266, test `AT`, passage en mode station (`CWMODE`), connexion au réseau Wi-Fi
+2. **Attente** : la boucle principale reste bloquée tant que le bouton (`Exti0`) n'a pas été pressé
+3. **Sur pression du bouton** :
+   - Démarrage et lecture de l'ADC
+   - Ouverture d'une connexion TCP (`CIPSTART`)
+   - Formatage de la valeur mesurée et envoi (`CIPSEND` + données)
+   - Fermeture de la connexion (`CIPCLOSE`)
+   - Pause de 15 secondes avant de pouvoir redéclencher une mesure
 
 ## 🔧 Matériel
 
 | Composant | Rôle |
 |---|---|
-| STM32F407 | Acquisition ADC + traitement |
-| Module ESP (ESP8266/ESP32) | Passerelle Wi-Fi (commandes AT) |
-| 3 capteurs analogiques | Grandeurs mesurées (ADC_CHANNEL_10/11/12) |
+| STM32F407VG | Acquisition ADC + pilotage ESP8266 |
+| ESP8266 | Passerelle Wi-Fi (commandes AT) |
+| Bouton poussoir (PA0) | Déclenchement manuel de la mesure |
+| Capteur analogique (ADC_CHANNEL_1) | Grandeur mesurée |
 
 ## ⚡ Configuration clé
 
 | Paramètre | Valeur |
 |---|---|
-| ADC | 12 bits, mode scan, 3 canaux, déclenché par TIM2 TRGO |
-| DMA | Continu (circulaire), transfert sans intervention CPU |
-| USART2 (liaison ESP) | 115200 bauds, réception non bloquante (`ReceiveToIdle_IT`) |
-| Protocole cloud | HTTP GET vers `api.thingspeak.com` + MQTT vers broker Mosquitto |
+| ADC | 8 bits, canal unique, conversion logicielle (polling) |
+| EXTI0 | Front descendant, pull-down |
+| USART2 (liaison ESP8266) | 115200 bauds |
+| Réception | DMA avec détection de ligne inactive (idle) |
+| Cycle | Pause bloquante de 15s après chaque transmission |
 
-## 💻 Code — Initialisation ADC + DMA (acquisition multi-canaux)
-
-```c
-hadc1.Instance = ADC1;
-hadc1.Init.Resolution = ADC_RESOLUTION_12B;
-hadc1.Init.ScanConvMode = ENABLE;
-hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO; // déclenché par TIM2
-hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-hadc1.Init.NbrOfConversion = 3;
-hadc1.Init.DMAContinuousRequests = ENABLE;
-HAL_ADC_Init(&hadc1);
-
-// 3 canaux configurés en séquence (rank 1, 2, 3)
-sConfig.Channel = ADC_CHANNEL_10; sConfig.Rank = 1;
-HAL_ADC_ConfigChannel(&hadc1, &sConfig);
-sConfig.Channel = ADC_CHANNEL_11; sConfig.Rank = 2;
-HAL_ADC_ConfigChannel(&hadc1, &sConfig);
-sConfig.Channel = ADC_CHANNEL_12; sConfig.Rank = 3;
-HAL_ADC_ConfigChannel(&hadc1, &sConfig);
-
-// Démarrage de l'acquisition en DMA circulaire, sans blocage CPU
-HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_Value, 3);
-```
-
-## 💻 Code — Connexion Wi-Fi du module ESP (commandes AT)
+## 💻 Code — Boucle principale, déclenchement par bouton
 
 ```c
-void ESP_Init_Station_Client(void) {
-    HAL_UART_Transmit(ESP_UART, (uint8_t*)cmd_at_test, strlen(cmd_at_test), 1000);
-    HAL_Delay(1000);
-
-    HAL_UART_Transmit(ESP_UART, (uint8_t*)cmd_at_rst, strlen(cmd_at_rst), 1000);
-    HAL_Delay(5000);
-
-    HAL_UART_Transmit(ESP_UART, (uint8_t*)cmd_cwmode_1, strlen(cmd_cwmode_1), 1000);
-    HAL_Delay(1000);
-
-    sprintf(cmd_buffer, "AT+CWJAP=\"%s\",\"%s\"\r\n", WIFI_SSID, WIFI_PASS);
-    HAL_UART_Transmit(ESP_UART, (uint8_t*)cmd_buffer, strlen(cmd_buffer), 10000);
-    HAL_Delay(8000);
+while (1)
+{
+    while (Exti0 == 0){}      // Attente du déclenchement bouton
+    ESP8266_SendServer();     // Mesure + envoi vers le serveur
 }
 ```
 
-## 💻 Code — Transmission vers ThingSpeak (HTTP GET)
+## 💻 Code — Mesure ADC et envoi au serveur
 
 ```c
-void Transmission_Cloud_THINGSPEAK(void)
+void ESP8266_SendServer (void)
 {
-    sprintf(cmd_buffer, "AT+CIPSTART=\"TCP\",\"184.106.153.149\",80\r\n");
-    HAL_UART_Transmit(ESP_UART, (uint8_t*)cmd_buffer, strlen(cmd_buffer), 1000);
-    HAL_Delay(1000);
+    HAL_ADC_Start(&hadc1);
+    HAL_ADC_PollForConversion(&hadc1, 10);
+    ADCVal = HAL_ADC_GetValue(&hadc1);
+    HAL_ADC_Stop(&hadc1);
 
-    sprintf(THINGSPEAK_REQUEST,
-        "GET /update?api_key=%s&field1=%hu&field2=%hu&field3=%hu\r\n",
-        APIKey, ADC_Value[0], ADC_Value[1], ADC_Value[2]);
+    ESP8266_SendCommand(__CIPSTART);   // Ouverture de la connexion TCP
 
-    sprintf(cmd_buffer, "AT+CIPSEND=%d\r\n", strlen(THINGSPEAK_REQUEST));
-    HAL_UART_Transmit(ESP_UART, (uint8_t*)cmd_buffer, strlen(cmd_buffer), 1000);
-    HAL_Delay(500);
+    memset(BUFFER_TO_SEND, '\0', sizeof(BUFFER_TO_SEND));
+    sprintf(BUFFER_TO_SEND, "%s=%d\r\n", __SERVER_IP_WRITE, ADCVal);
+    sprintf((char*)__CIPSEND, "AT+CIPSEND=%d\r\n", strlen(BUFFER_TO_SEND));
 
-    HAL_UART_Transmit(ESP_UART, (uint8_t*)THINGSPEAK_REQUEST, strlen(THINGSPEAK_REQUEST), 1000);
-    HAL_Delay(1000);
+    ESP8266_SendCommand(__CIPSEND);
+    ESP8266_SendCommand((uint8_t*)&BUFFER_TO_SEND[0]);
+    ESP8266_SendCommand(__CIPCLOSE);
+
+    Exti0 = 0;
+    HAL_Delay(15000);          // Pause avant la prochaine mesure
+}
+```
+
+## 💻 Code — Réception série par DMA avec détection de ligne inactive
+
+```c
+void ESP8266_Receive (void)
+{
+    UART_DMA_DataIsReady = 0;
+    memset(DMA_Buffer, '\0', sizeof(DMA_Buffer));
+    // Reçoit jusqu'à détection d'une ligne inactive (fin de trame de taille variable)
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart2, (uint8_t*)DMA_Buffer, sizeof(DMA_Buffer));
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+    memset(CPU_Buffer, '\0', sizeof(CPU_Buffer));
+    memcpy(CPU_Buffer, DMA_Buffer, (DMAMAXCOUNTER - DMA1_Stream5->NDTR));
+    ESP8266_Receive();          // Relance immédiatement l'écoute
+    UART_DMA_DataIsReady = 1;
 }
 ```
 
 ## 🚀 Build & Flash
 
 1. Ouvrir le projet dans STM32CubeIDE
-2. Renseigner tes identifiants Wi-Fi et ta clé API ThingSpeak dans le bloc `#define` en haut de `main.c`
+2. Renseigner `WIFI_NAME`, `WIFI_PASSWORD` et `__SERVER_IP_WRITE` dans les définitions du projet
 3. Compiler en configuration Debug
 4. Flasher la carte STM32F407 via ST-LINK
-5. Observer les transmissions sur un terminal série (HTerm) branché sur le module ESP
+5. Appuyer sur le bouton (PA0) pour déclencher une mesure et un envoi
 
 ## 🔭 Pistes d'amélioration
 
-- **Passage en interruption/DMA côté ESP** : remplacer les délais fixes (`HAL_Delay`) après chaque commande AT par une détection réelle de réponse (`OK`, `>`) pour un échange plus robuste et plus rapide
-- **Gestion des erreurs réseau** : détecter les échecs de connexion Wi-Fi ou de requête HTTP et relancer automatiquement au lieu de continuer en aveugle
-- **Sécurisation de la clé API** : externaliser `APIKey` et les identifiants Wi-Fi hors du code source (fichier de config séparé, non versionné)
-- **Passage à MQTT avec TLS** : chiffrer la liaison vers le broker pour un déploiement au-delà d'un réseau local de confiance
-- **Historique local** : bufferiser quelques échantillons en cas de coupure Wi-Fi, pour éviter la perte de données entre deux tentatives de connexion
+- **Nettoyer les déclarations dupliquées** : plusieurs variables globales (`__CIPSEND`, `DMA_Buffer`, `hdma_adc1`, etc.) sont actuellement déclarées trois fois dans le fichier — à factoriser en une seule section `USER CODE BEGIN PV`
+- **Anti-rebond matériel ou logiciel** sur le bouton EXTI0, pour éviter les déclenchements multiples sur un seul appui
+- **Vérification des réponses AT** : actuellement le code attend un délai fixe puis considère la donnée "prête" — ajouter une vérification du contenu (`OK`, `ERROR`) pour détecter les échecs de connexion
+- **ADC en 12 bits** : passer de 8 à 12 bits de résolution pour une meilleure précision de mesure
+- **Suppression du délai bloquant de 15s** : le remplacer par un timer non bloquant pour garder le système réactif pendant l'attente
+- **Sécurisation des identifiants Wi-Fi** : les externaliser du code source
 
 ## 🛠 Tech Stack
 
-`STM32F407` · `ESP8266/ESP32` · `C` · `ADC + DMA` · `USART` · `Commandes AT` · `MQTT (Mosquitto)` · `ThingSpeak` · `Node-RED` · `IoT`
-
-## 📄 License
-
-MIT
+`STM32F407` · `ESP8266` · `C` · `ADC` · `USART + DMA` · `EXTI` · `Commandes AT` · `IoT`
