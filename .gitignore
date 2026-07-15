@@ -1,0 +1,27 @@
+# STM32CubeIDE
+
+# Build folders
+Debug/
+Release/
+
+# IDE settings
+.settings/
+
+# Launch configuration
+*.launch
+
+# Generated binaries
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.o
+*.d
+
+# Temporary files
+*.log
+
+# Windows
+Thumbs.db
+.DS_Store
